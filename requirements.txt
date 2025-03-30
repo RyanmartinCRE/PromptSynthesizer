@@ -1,0 +1,5 @@
+streamlit
+streamlit-lottie
+google-generativeai
+python-dotenv
+pandas
