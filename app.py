@@ -1,4 +1,3 @@
-
 import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
@@ -18,8 +17,7 @@ from utils.ui import render_header, render_sidebar, render_footer
 
 # --- Setup ---
 load_dotenv()
-IS_DEV = os.getenv("APP_MODE") == "dev"
-st.set_page_config(page_title="Prompt Synthesizer", page_icon="🧠", layout="centered")
+st.set_page_config(page_title="Prompt Synthesizer", page_icon="🧠", layout="wide")
 
 auth.init_session_state()
 
@@ -42,8 +40,6 @@ if not GOOGLE_API_KEY:
 try:
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel("models/gemini-1.5-flash")
-    if IS_DEV:
-        st.success("Gemini model loaded")
 except Exception as e:
     st.error(f"Gemini model error: {e}")
     st.stop()
@@ -74,11 +70,27 @@ prefill = template_data if template_data else {}
 render_header()
 render_sidebar(lottie_json)
 
+# --- Voice Input ---
+st.markdown("### 🎙️ Or speak your idea:")
+audio_file = st.file_uploader("Upload voice note (.wav/.mp3)", type=["wav", "mp3"])
+transcribed_goal = ""
+if audio_file is not None:
+    with st.spinner("Transcribing..."):
+        audio_bytes = audio_file.read()
+        try:
+            transcribe_prompt = "Transcribe this voice message into a clear goal for an AI prompt."
+            transcription = model.generate_content([transcribe_prompt, audio_bytes])
+            transcribed_goal = getattr(transcription, "text", "").strip()
+            st.success("Transcribed Goal:")
+            st.write(transcribed_goal)
+        except Exception as e:
+            st.error(f"Error transcribing audio: {e}")
+
 # --- Form ---
 with st.form("prompt_form"):
     st.markdown("### ✍️ Your Prompt Details")
-    goal = st.text_area("💡 What do you want the AI to do?", value=prefill.get("goal", ""))
-    
+    goal = st.text_area("💡 What do you want the AI to do?", value=transcribed_goal or prefill.get("goal", ""))
+
     col1, col2 = st.columns(2)
     with col1:
         tone = st.selectbox("🎭 Tone", valid_tones,
@@ -102,7 +114,6 @@ if submitted:
     else:
         with st.spinner("Synthesizing your prompt..."):
             prompt_template = build_prompt(goal, tone, output_type, audience, depth, god_mode)
-
             try:
                 response = model.generate_content(prompt_template)
                 result = getattr(response, "text", "").strip()
@@ -115,6 +126,25 @@ if submitted:
                 st.markdown(result)
                 st.download_button("📥 Download", result, file_name=f"prompt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
 
+                # Save last input for remix
+                st.session_state.last_prompt_params = {
+                    "goal": goal,
+                    "tone": tone,
+                    "output_type": output_type,
+                    "audience": audience,
+                    "depth": depth,
+                    "god_mode": god_mode,
+                }
+
+                # Feedback buttons
+                st.markdown("### ⭐ Rate this result:")
+                col1, col2 = st.columns(2)
+                if col1.button("👍 Like"):
+                    st.toast("Thanks for the thumbs up!")
+                if col2.button("👎 Dislike"):
+                    st.toast("We’ll try to do better!")
+
+                # Save to history
                 if save_txt:
                     new_row = {
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -132,8 +162,21 @@ if submitted:
 
             except Exception as e:
                 st.error(f"Error during generation: {e}")
-                if IS_DEV:
-                    st.exception(e)
+
+# --- Remix Feature ---
+if "last_prompt_params" in st.session_state and st.button("🔁 Remix This Prompt"):
+    remix = st.session_state.last_prompt_params.copy()
+    remix["tone"] = random.choice([t for t in valid_tones if t != remix["tone"]])
+    remix["output_type"] = random.choice([o for o in output_types if o != remix["output_type"]])
+
+    with st.spinner("Remixing your prompt..."):
+        remix_prompt = build_prompt(**remix)
+        remix_response = model.generate_content(remix_prompt)
+        remix_text = getattr(remix_response, "text", "").strip()
+
+        if remix_text:
+            st.markdown("### 🎲 Remixed Prompt")
+            st.markdown(remix_text)
 
 # --- Prompt History Viewer ---
 if not past_prompts.empty:
